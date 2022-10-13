@@ -19,26 +19,6 @@ import (
 	"golang.org/x/crypto/ssh/terminal"
 )
 
-func devConnect(devIP string, devUser string, devPass string) (*netconf.Session, error) {
-	sshConfig := &ssh.ClientConfig{
-		User:            devUser,
-		Auth:            []ssh.AuthMethod{ssh.Password(devPass)},
-		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
-	}
-	s, err := netconf.DialSSH(devIP, sshConfig)
-	if err != nil {
-		return nil, err
-	}
-
-	return s, nil
-}
-
-func devClose(openSession *netconf.Session) error {
-	openSession.Close()
-	return nil
-
-}
-
 func getZone(openSession *netconf.Session, lookupIP string) (string, error) {
 	getRouteRPC := fmt.Sprintf("<get-route-information><destination>%s</destination><active-path/></get-route-information>", lookupIP)
 
@@ -62,9 +42,17 @@ func getZone(openSession *netconf.Session, lookupIP string) (string, error) {
 		if v.TableName == "mgmt_junos.inet.0" {
 			continue
 		}
-		outputInt = v.Rt.RtEntry.Nh.Via
+		if v.Rt.RtEntry.Nh.LocalInterface != "" {
+			outputInt = v.Rt.RtEntry.Nh.LocalInterface
+		} else if v.Rt.RtEntry.Nh.Via != "" {
+			outputInt = v.Rt.RtEntry.Nh.Via
+		} else {
+			log.Printf("There was a problem resolving the IP to an interface")
+		}
 		break
 	}
+
+	fmt.Println(outputInt)
 
 	getZoneRPC := fmt.Sprintf("<get-interface-information><interface-name>%s</interface-name></get-interface-information>", outputInt)
 	var zoneResp InterfaceInformation
@@ -205,10 +193,16 @@ func main() {
 	srcAddrIP := net.ParseIP(srcAddr)
 	dstAddrIP := net.ParseIP(dstAddr)
 
-	devSession, err := devConnect(firewallMenu[fwChoice], fwUser, fwPass)
-	if err != nil {
-		log.Fatal(err)
+	sshConfig := &ssh.ClientConfig{
+		User:            fwUser,
+		Auth:            []ssh.AuthMethod{ssh.Password(fwPass)},
+		HostKeyCallback: ssh.InsecureIgnoreHostKey(),
 	}
+	devSession, err := netconf.DialSSH(firewallMenu[fwChoice], sshConfig)
+	if err != nil {
+		log.Printf("Error connecting to device")
+	}
+	defer devSession.Close()
 
 	fromZone, err := getZone(devSession, srcAddr)
 	if err != nil {
@@ -223,10 +217,7 @@ func main() {
 	toZone = strings.TrimRight(toZone, "\r\n")
 
 	if fromZone == "" || toZone == "" {
-		err = devClose(devSession)
-		if err != nil {
-			log.Fatal(err)
-		}
+		log.Printf("Could not resolve zone information, please check IP")
 		os.Exit(0)
 	}
 
@@ -266,11 +257,6 @@ func main() {
 		}
 
 		err = xml.Unmarshal([]byte(rpcResponse.Data), &globalPolicyResp)
-		if err != nil {
-			log.Fatal(err)
-		}
-
-		err = devClose(devSession)
 		if err != nil {
 			log.Fatal(err)
 		}
@@ -334,10 +320,7 @@ func main() {
 		}
 
 	} else if policyResp.MultiRoutingEngineItem.SecurityPolicyMatch.PolicyInformation.PolicyAction.ActionType == "permit" {
-		err = devClose(devSession)
-		if err != nil {
-			log.Fatal(err)
-		}
+
 		color.Green("\nTraffic is allowed at %s\n============================", keys[firewallKey])
 		color.Green("%-25s %-20s\n", "Source Address:", srcAddr)
 		color.Green("%-25s %-20s\n", "Source Zone:", strings.TrimLeft(fromZone, "\r\n"))

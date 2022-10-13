@@ -189,6 +189,7 @@ type RouteInformation struct {
 					SelectedNextHop string `xml:"selected-next-hop"`
 					To              string `xml:"to"`
 					Via             string `xml:"via"`
+					LocalInterface  string `xml:"nh-local-interface"`
 				} `xml:"nh"`
 			} `xml:"rt-entry"`
 		} `xml:"rt"`
